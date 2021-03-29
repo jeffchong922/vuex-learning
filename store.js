@@ -18,21 +18,114 @@ export class Store {
     this._modulesNamespaceMap = Object.create(null)
     this._makeLocalGettersCache = Object.create(null)
 
+    /* 重新包装 dispatch 和 commit，为了确保在函数中 this 的指向正确性 */
+    const store = this
+    const { dispatch, commit } = this
+    this.dispatch = function boundDispatch (type, payload) {
+      return dispatch.call(store, type, payload)
+    }
+    this.commit = function boundDispatch (type, payload, options) {
+      return commit.call(store, type, payload, options)
+    }
+
     const state = this._modules.root.state
 
     installModule(this, state, [], this._modules.root)
 
-    /* 初始化 vuex 的 vue 实例，这是响应式的关键。会在 vuex 实例添加 _vm、getters 属性 */
     resetStoreVM(this, state)
   }
 
   get state () {
-    /* $$state 是响应式数据 */
     return this._vm._data.$$state
   }
 
   set state (v) {
-    /* 这里会报错 */
+  }
+
+  commit (_type, _payload, _options) {
+    /* 检查 type */
+    const {
+      type,
+      payload,
+      options
+    } = unifyObjectStyle(_type, _payload, _options)
+
+    const mutation = { type, payload }
+
+    /* 获取相关函数数组 */
+    const entry = this._mutations[type]
+    if (!entry) {
+      return
+    }
+
+    /**
+     * entry 通常为一个，遍历执行相关 mutation
+     */
+    this._withCommit(() => {
+      entry.forEach(function commitIterator (handler) {
+        handler(payload)
+      })
+    })
+
+    /* 插件用，下一个分支 */
+    this._subscribers
+      .slice() // shallow copy to prevent iterator invalidation if subscriber synchronously calls unsubscribe
+      .forEach(sub => sub(mutation, this.state))
+  }
+
+  dispatch (_type, _payload) {
+    /* 检查 type */
+    const {
+      type,
+      payload
+    } = unifyObjectStyle(_type, _payload)
+
+    const action = { type, payload }
+
+    /* 获取相关数组 */
+    const entry = this._actions[type]
+    if (!entry) {
+      return
+    }
+
+    try {
+      /* 这里是插件用的，将会在下个分支将 */
+      this._actionSubscribers
+        .slice() // shallow copy to prevent iterator invalidation if subscriber synchronously calls unsubscribe
+        .filter(sub => sub.before)
+        .forEach(sub => sub.before(action, this.state))
+    } catch (e) {
+    }
+
+    /**
+     * 因为所有的 action 结果都已经包装了 Promise，所以有了 Promise.all
+     *   正常情况下，entry 通常为一个，多个的情况发生在子孙模块未启用命名空间，且子孙模块的 action 与祖先模块的 action 存在相同属性名
+     */
+    const result = entry.length > 1
+      ? Promise.all(entry.map(handler => handler(payload)))
+      : entry[0](payload)
+
+    return new Promise((resolve, reject) => {
+      result.then(res => {
+        try {
+          /* 插件用，下一个分支 */
+          this._actionSubscribers
+            .filter(sub => sub.after)
+            .forEach(sub => sub.after(action, this.state))
+        } catch (e) {
+        }
+        resolve(res)
+      }, error => {
+        try {
+          /* 插件用，下一个分支 */
+          this._actionSubscribers
+            .filter(sub => sub.error)
+            .forEach(sub => sub.error(action, this.state, error))
+        } catch (e) {
+        }
+        reject(error)
+      })
+    })
   }
 
   _withCommit (fn) {
@@ -44,31 +137,16 @@ export class Store {
 }
 
 function resetStoreVM (store, state, hot) {
-  /* 旧的 vue 实例，当然一开始是 undefined */
   const oldVm = store._vm
 
   store.getters = {}
-  /* resetStoreVM 并非调用一次，所以旧的缓存要清掉 */
   store._makeLocalGettersCache = Object.create(null)
-  /* 所有的 getters */
   const wrappedGetters = store._wrappedGetters
 
   const computed = {}
   forEachValue(wrappedGetters, (fn, key) => {
-    /* key 是带有命名空间字符串的，fn 就是各 getters 函数 */
-
-    /* partial 是一种简单的柯里化函数，其返回的是一个函数，并且将 store 保存起来 */
-    /**
-     * computed: {
-     *    someVal () {
-     *      return fn(store)
-     *    }
-     * }
-     * 而 fn 则是一个包装函数 wrappedGetters (store) { return rawGetter(...) }
-     */
     computed[key] = partial(fn, store)
 
-    /* 访问 store.getters[key] 就是访问 computed，记得带上命名空间字符串 */
     Object.defineProperty(store.getters, key, {
       get: () => store._vm[key],
       enumerable: true // for local getters
@@ -77,7 +155,6 @@ function resetStoreVM (store, state, hot) {
 
   const silent = Vue.config.silent
   Vue.config.silent = true
-  /* 创建 vue 实例！响应式的关键，data 只有一个属性 $$state，全局状态管理！ */
   store._vm = new Vue({
     data: {
       $$state: state
@@ -86,7 +163,6 @@ function resetStoreVM (store, state, hot) {
   })
   Vue.config.silent = silent
 
-  /* 销毁旧的 vue 实例 */
   if (oldVm) {
     if (hot) {
       store._withCommit(() => {
