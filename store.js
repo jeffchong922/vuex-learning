@@ -10,12 +10,20 @@ export class Store {
       install(window.Vue)
     }
 
+    const {
+      plugins = []
+    } = options
+
     this._committing = false
     this._actions = Object.create(null)
+    /* 保存订阅者, dispatch */
+    this._actionSubscribers = []
     this._mutations = Object.create(null)
     this._wrappedGetters = Object.create(null)
     this._modules = new ModuleCollection(options)
     this._modulesNamespaceMap = Object.create(null)
+    /* 保存订阅者，commit */
+    this._subscribers = []
     this._makeLocalGettersCache = Object.create(null)
 
     /* 重新包装 dispatch 和 commit，为了确保在函数中 this 的指向正确性 */
@@ -33,6 +41,9 @@ export class Store {
     installModule(this, state, [], this._modules.root)
 
     resetStoreVM(this, state)
+
+    /* plugin 是一个函数，能获取当前 vuex 实例 */
+    plugins.forEach(plugin => plugin(this))
   }
 
   get state () {
@@ -43,38 +54,33 @@ export class Store {
   }
 
   commit (_type, _payload, _options) {
-    /* 检查 type */
     const {
       type,
       payload,
       options
     } = unifyObjectStyle(_type, _payload, _options)
 
+    /* 传给插件的值 */
     const mutation = { type, payload }
 
-    /* 获取相关函数数组 */
     const entry = this._mutations[type]
     if (!entry) {
       return
     }
 
-    /**
-     * entry 通常为一个，遍历执行相关 mutation
-     */
     this._withCommit(() => {
       entry.forEach(function commitIterator (handler) {
         handler(payload)
       })
     })
 
-    /* 插件用，下一个分支 */
+    /* 修改完数据后，遍历所有订阅者，并传入相关值与当前状态 */
     this._subscribers
       .slice() // shallow copy to prevent iterator invalidation if subscriber synchronously calls unsubscribe
       .forEach(sub => sub(mutation, this.state))
   }
 
   dispatch (_type, _payload) {
-    /* 检查 type */
     const {
       type,
       payload
@@ -82,14 +88,13 @@ export class Store {
 
     const action = { type, payload }
 
-    /* 获取相关数组 */
     const entry = this._actions[type]
     if (!entry) {
       return
     }
 
     try {
-      /* 这里是插件用的，将会在下个分支将 */
+      /* 订阅者可以配置一个对象，用于在执行 action 之前获取相关数据 */
       this._actionSubscribers
         .slice() // shallow copy to prevent iterator invalidation if subscriber synchronously calls unsubscribe
         .filter(sub => sub.before)
@@ -97,10 +102,6 @@ export class Store {
     } catch (e) {
     }
 
-    /**
-     * 因为所有的 action 结果都已经包装了 Promise，所以有了 Promise.all
-     *   正常情况下，entry 通常为一个，多个的情况发生在子孙模块未启用命名空间，且子孙模块的 action 与祖先模块的 action 存在相同属性名
-     */
     const result = entry.length > 1
       ? Promise.all(entry.map(handler => handler(payload)))
       : entry[0](payload)
@@ -108,7 +109,7 @@ export class Store {
     return new Promise((resolve, reject) => {
       result.then(res => {
         try {
-          /* 插件用，下一个分支 */
+          /* 成功执行完所有 action 之后通知订阅者 */
           this._actionSubscribers
             .filter(sub => sub.after)
             .forEach(sub => sub.after(action, this.state))
@@ -117,7 +118,7 @@ export class Store {
         resolve(res)
       }, error => {
         try {
-          /* 插件用，下一个分支 */
+          /* 错误的情况下，通知错误的相关函数 */
           this._actionSubscribers
             .filter(sub => sub.error)
             .forEach(sub => sub.error(action, this.state, error))
@@ -128,11 +129,44 @@ export class Store {
     })
   }
 
+  /**
+   * fn 即插件的回调函数
+   */
+  subscribe (fn, options) {
+    /* 简单的将 fn 添加到 this._subscribers */
+    return genericSubscribe(fn, this._subscribers, options)
+  }
+
+  /**
+   * fn 即插件的回调函数
+   */
+  subscribeAction (fn, options) {
+    const subs = typeof fn === 'function' ? { before: fn } : fn
+    return genericSubscribe(subs, this._actionSubscribers, options)
+  }
+
   _withCommit (fn) {
     const committing = this._committing
     this._committing = true
     fn()
     this._committing = committing
+  }
+}
+
+function genericSubscribe (fn, subs, options) {
+  /* 检查数组是否包含当前订阅者 */
+  if (subs.indexOf(fn) < 0) {
+    /* 调整通知顺序 */
+    options && options.prepend
+      ? subs.unshift(fn)
+      : subs.push(fn)
+  }
+  /* 返回用于取消订阅的函数 */
+  return () => {
+    const i = subs.indexOf(fn)
+    if (i > -1) {
+      subs.splice(i, 1)
+    }
   }
 }
 
