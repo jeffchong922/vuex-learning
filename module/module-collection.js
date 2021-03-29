@@ -12,19 +12,10 @@ export default class ModuleCollection {
     }, this.root)
   }
 
-  /**
-   * 组合 key 值
-   * @param {string[]} path 保存 modules 的 key 值
-   * @returns {string}
-   */
   getNamespace (path) {
     let module = this.root
     return path.reduce((namespace, key) => {
       module = module.getChild(key)
-      /**
-       * 只用启用了命名空间，才会将模块的 key 添加上去
-       * 根模块实例为空字符串
-       */
       return namespace + (module.namespaced ? key + '/' : '')
     }, '')
   }

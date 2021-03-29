@@ -8,6 +8,11 @@ export function isObject (obj) {
 }
 
 export function isPromise (val) {
-  /* 鸭子判断 */
   return val && typeof val.then === 'function'
+}
+
+export function partial (fn, arg) {
+  return function () {
+    return fn(arg)
+  }
 }
