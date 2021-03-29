@@ -1,28 +1,52 @@
 import { forEachValue } from '../util'
 
-/**
- * vuex 的基础数据结构
- */
 export default class Module {
   constructor (rawModule, runtime) {
-    /* 用来标识当前模块是否时动态注册的，静态注册不可卸载 */
     this.runtime = runtime
-    /* 子模块映射表，只会保存一层 */
     this._children = Object.create(null)
-    /* 模块原始数据 */
     this._rawModule = rawModule
-    /* 模块状态初始化 */
     const rawState = rawModule.state
     this.state = (typeof rawState === 'function' ? rawState() : rawState) || {}
   }
 
-  /* 添加子模块实例 */
+  /**
+   * getter 是否启用命名空间
+   */
+  get namespaced () {
+    return !!this._rawModule.namespaced
+  }
+
   addChild (key, module) {
     this._children[key] = module
   }
 
-  /* 获取子模块实例 */
   getChild (key) {
     return this._children[key]
+  }
+
+  /* 遍历子模块实例 */
+  forEachChild (fn) {
+    forEachValue(this._children, fn)
+  }
+
+  /* 遍历模块的 getters 属性 */
+  forEachGetter (fn) {
+    if (this._rawModule.getters) {
+      forEachValue(this._rawModule.getters, fn)
+    }
+  }
+
+  /* 遍历模块的 actions 属性 */
+  forEachAction (fn) {
+    if (this._rawModule.actions) {
+      forEachValue(this._rawModule.actions, fn)
+    }
+  }
+
+  /* 遍历模块的 mutations 属性 */
+  forEachMutation (fn) {
+    if (this._rawModule.mutations) {
+      forEachValue(this._rawModule.mutations, fn)
+    }
   }
 }
