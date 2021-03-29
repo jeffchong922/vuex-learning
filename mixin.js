@@ -37,7 +37,7 @@ export default function (Vue) {
     } else if (options.parent && options.parent.$store) {
       /**
        * 由于 vue 组件整体属于树形结构
-       *  通过类似递归的方式，可以为每个子组件都添加 $store 属性，它们(一般情况下)都指向根实例的 $store
+       *  通过类似广度优先遍历的方式，可以为每个子组件都添加 $store 属性，它们(一般情况下)都指向根实例的 $store
        *  即 vuex 所说的：它采用集中式存储管理应用的 **所有组件** 的状态
        */
       this.$store = options.parent.$store
